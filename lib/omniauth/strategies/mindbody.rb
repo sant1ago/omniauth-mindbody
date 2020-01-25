@@ -27,14 +27,15 @@ module OmniAuth
           end
 
           if (res.status != "Success" || res.nil?) && options.enable_staff_logins
-            res = ::MindBody::Services::StaffService.get_staff('StaffCredentials' => {'Username' => request.params['email'], 
-                                                                                      'Password' => request.params['password'],
-                                                                                      'SiteIDs' => {'int' => ::MindBody.configuration.site_ids}})
+            # res = ::MindBody::Services::StaffService.get_staff('StaffCredentials' => {'Username' => request.params['email'],
+            #                                                                           'Password' => request.params['password'],
+            #                                                                           'SiteIDs' => {'int' => ::MindBody.configuration.site_ids}})
+            response = MindBody::Services::StaffService.get_staff()
           end
 
-          return fail!(:invalid_credentials) if res.nil? || res.status != "Success"
+          return false if response.nil? || response.status != "Success"
 
-          @raw_info ||= res.result
+          @raw_info ||= response.result[:staff_members].where(email: login_params['email']) #response.result
           super
         rescue Exception => e
           return fail!(:mindbody_error, e)
