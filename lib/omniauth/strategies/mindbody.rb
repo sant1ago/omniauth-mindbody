@@ -1,5 +1,7 @@
 require 'omniauth'
 require 'mindbody-api'
+require 'uri'
+require 'net/http'
 
 module OmniAuth
   module Strategies
@@ -27,38 +29,65 @@ module OmniAuth
           end
 
           if (res.status != "Success" || res.nil?) && options.enable_staff_logins
-            # res = ::MindBody::Services::StaffService.get_staff('StaffCredentials' => {'Username' => request.params['email'],
-            #                                                                           'Password' => request.params['password'],
-            #                                                                           'SiteIDs' => {'int' => ::MindBody.configuration.site_ids}})
-            response = MindBody::Services::StaffService.get_staff()
+            email = request.params['email']
+            password = request.params['password']
+            url = URI("https://api.mindbodyonline.com/public/v6/usertoken/issue")
+
+            http = Net::HTTP.new(url.host, url.port)
+            http.use_ssl = true
+            http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+
+            req = Net::HTTP::Post.new(url)
+            req["Content-Type"] = 'application/json'
+            req["Api-Key"] = ENV['HARDPRESSED_API_ACCESS_TOKEN']
+            req["SiteId"] = ENV['MINDBODY_SITE_IDS']
+            req.body = "{\r\n\t\"Username\": \"#{email}\",\r\n\t\"Password\": \"#{password}\"\r\n}"
+            res = http.request(req)
+
+            return fail!(:invalid_credentials) if res.nil? || res.code != "200"
+            auth = JSON.parse(res.body)
+            userId=auth["User"]["Id"]
+
+            url = URI("https://api.mindbodyonline.com/public/v6/staff/staff")
+            http = Net::HTTP.new(url.host, url.port)
+            http.use_ssl = true
+            http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+
+            req = Net::HTTP::Get.new(url)
+            req["Api-Key"] = ENV['HARDPRESSED_API_ACCESS_TOKEN']
+            req["SiteId"] = ENV['MINDBODY_SITE_IDS']
+            res = http.request(req)
           end
 
-          return false if response.nil? || response.status != "Success"
+          return fail!(:invalid_credentials) if res.nil? || res.code != "200"
+          coaches = JSON.parse(res.body)["StaffMembers"]
+          for coach in coaches
+            @raw_info = coach if coach["Id"] == userId
+          end
 
-          @raw_info ||= response.result[:staff_members].where(email: login_params['email']) #response.result
           super
         rescue Exception => e
           return fail!(:mindbody_error, e)
         end
       end
 
-      uid { profile.id.to_s }
+      uid { raw_info["Id"].to_s }
 
       info do
         {
-          :name => profile.name,
-          :first_name => profile.first_name,
-          :last_name => profile.last_name,
-          :email => profile.email,
-          :phone => profile.home_phone || profile.mobile_phone,
-          :location => profile.city.nil? ? "#{profile.city}, #{profile.state}" : profile.state,
-          :nickname => profile.username,
-          :image => profile.photo_url
+            :name => raw_info["Name"],
+            :first_name => raw_info["FirstName"],
+            :last_name => raw_info["LastName"],
+            :email => raw_info["Email"],
+            :phone => raw_info["HomePhone"] || raw_info["MobilePhone"],
+            :location => raw_info["City"].nil? ? "#{raw_info["City"]}, #{raw_info["State"]}" : raw_info["State"],
+            :nickname => raw_info["Name"],
+            :image => raw_info["ImageUrl"]
         }
       end
 
       credentials do
-        {:guid => raw_info[:guid].to_s }
+        {:guid => raw_info["Id"].to_s }
       end
 
       extra do
@@ -70,19 +99,12 @@ module OmniAuth
         @raw_info
       end
 
-      def profile
-        @profile ||= raw_info[:client] || raw_info[:staff_members]
-      end
+      # def profile
+      #   @profile ||= raw_info[:client] || raw_info[:staff_members]
+      # end
 
       def login_type
-        case
-        when raw_info.has_key?(:client)
-          'client'
-        when raw_info.has_key?(:staff_members)
-          'staff'
-        else
-          'unknown'
-        end
+        'staff'
       end
     end
   end
